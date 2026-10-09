@@ -1,0 +1,11 @@
+# TEMPORARY SPIKE CONTROL WORKFLOW. Deliberately has NO workflow_dispatch trigger, so it must not be remotely startable.
+name: ci-noop
+on:
+  pull_request: {}
+permissions:
+  contents: read
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "control workflow, does nothing"
