@@ -1,0 +1,9 @@
+{
+  // THROWAWAY spike Worker on the Living Wholistically business account. Created and updated only by CI. Deleted after the spike.
+  "name": "lw-spike-deploy",
+  "account_id": "0aaccdf1516f33043bac41bd746d38e4",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "assets": { "directory": "./public", "binding": "ASSETS" }
+}

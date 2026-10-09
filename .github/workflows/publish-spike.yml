@@ -1,31 +1,55 @@
-# TEMPORARY SPIKE WORKFLOW. Throwaway test only; no secrets, no production code.
+# TEMPORARY SPIKE: full publish chain. Dispatched with NO inputs; builds only main; reads the requested release from private R2.
 name: publish-spike
-
 on:
-  workflow_dispatch: {}   # deliberately NO inputs: a caller cannot pass anything in
-
+  workflow_dispatch: {}
 permissions:
   contents: read
-
 concurrency:
   group: publish-spike
   cancel-in-progress: false
-
 jobs:
-  guard-and-record:
+  publish:
     runs-on: ubuntu-latest
+    environment: production
+    env:
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_DEPLOY_TOKEN }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      SITE: https://lw-spike-deploy.livingwholistically.workers.dev
     steps:
       - name: Refuse to run on anything but main
         run: |
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "::error::Refusing to run on $GITHUB_REF; only refs/heads/main is allowed."
-            exit 1
-          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then echo "::error::only refs/heads/main may publish"; exit 1; fi
       - uses: actions/checkout@v4
         with:
           ref: main
-      - name: Record what ran
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Read requested release from private R2 (read-only credential) and verify its hash
+        run: node scripts/fetch-snapshot.mjs
+      - name: Validate and build from main + the verified snapshot
+        run: node scripts/build.mjs
+      - name: Remember the currently live release (for rollback evidence)
         run: |
-          echo "commit: $(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "ref: $GITHUB_REF" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "run: $GITHUB_RUN_ID" | tee -a "$GITHUB_STEP_SUMMARY"
+          curl -s -m 20 "$SITE/release.json" > previous-release.json || echo '{}' > previous-release.json
+          echo "previous: $(cat previous-release.json | head -c 200)"
+      - name: Deploy
+        run: npx --yes wrangler@4.149.0 deploy
+      - name: Verify the live site matches commit + release; roll back on failure
+        run: |
+          want_commit="$GITHUB_SHA"; want_release="$(cat snapshot.id)"
+          ok=0
+          for i in $(seq 1 12); do
+            live="$(curl -s -m 15 "$SITE/release.json?cb=$i$RANDOM" || true)"
+            if echo "$live" | grep -q "\"commit\":\"$want_commit\"" && echo "$live" | grep -q "\"release_id\":\"$want_release\"" && curl -sf -m 15 "$SITE/api/health" >/dev/null; then ok=1; break; fi
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::post-deploy verification failed; rolling back to the previous version"
+            npx --yes wrangler@4.149.0 rollback -y --message "auto rollback: verification failed in run $GITHUB_RUN_ID" || true
+            exit 1
+          fi
+          echo "verified: commit ${want_commit:0:7} release ${want_release:0:12}" | tee -a "$GITHUB_STEP_SUMMARY"

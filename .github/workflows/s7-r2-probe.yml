@@ -1,0 +1,34 @@
+# TEMPORARY SPIKE: proves the R2 credential is read-only. No inputs.
+name: s7-r2-probe
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: R2 capability probe (status codes only)
+        run: |
+          cat > probe.mjs <<'EOF'
+          import { presign } from "./scripts/r2.mjs";
+          const B = "lw-spike-private";
+          const call = async (label, method, key, bucket = B, body) => { const r = await fetch(presign(method, bucket, key), { method, body }); console.log(`${label.padEnd(58)} HTTP ${r.status}`); };
+          await call("read requested.json (allowed)", "GET", "requested.json");
+          await call("write a new object (must be refused)", "PUT", "evil-write.txt", B, "x");
+          await call("overwrite requested.json (must be refused)", "PUT", "requested.json", B, "{}");
+          await call("delete requested.json (must be refused)", "DELETE", "requested.json");
+          await call("read from a different bucket (must be refused)", "GET", "requested.json", "lw-spike-other-bucket");
+          EOF
+          node probe.mjs
